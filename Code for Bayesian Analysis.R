@@ -1,23 +1,38 @@
-source("Libraries.R")
+#Load necessary packages
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(bayesplot)
+library(bayestestR)
+library(MetaStan)
+library(brms)
+library(tidybayes)
+library(stringr)
+library(ggplot2)
+library(ggridges)
+library(ggpubr)
+
 #Import data from excel file
 x <- read_xlsx("data_cancer_anticoags.xlsx")
 #Store as dataframe
 x <- as.data.frame(x)
 
-#Create metastan data
+#Provide data in "long" format suitable for brms
 y <- create_MetaStan_dat(
   dat = x,
   armVars = c(responders = "e", sampleSize = "n"),
   nArmsVar = "n_arms"
 )
 
-#Data
+#Store "long" format data in a separate object
 data <- y$data_long
-#Assign treatment
+
+#Assign treatment variables
 data$ttt <- c(-0.5, 0.5)
+#Assign study variables
 data$study <- rep(x$study, each = 2)
 
-#Set formula
+#Set formula to be used for logistic regression
 meta_formula <- bf(
   responders | trials(sampleSize) ~ 0 + factor(study) + ttt + (ttt - 1 | study)
 )
@@ -27,58 +42,56 @@ priors <- c(prior(normal(0, 10), class = b), #Baseline log-odds of ATE
             prior(normal(0,1), class = b, coef = "ttt"), #Treatment effect
             prior(cauchy(0,0.5), class = sd)) #Heterogeneity
 
-# Specify the control parameters
+# Specify the control parameters (to prevent divergences)
 control <- list(adapt_delta = 0.95)
 
-#Run brms
+#Run model
 b_model <- brm(data = data,
                family = binomial,
     formula = meta_formula,
-    seed = 100,
+    seed = 100, #Set seed for reproducibility
     prior = priors,
     control = control)
 
-#Get P-direction
+#Get probability of any benefit (OR < 1)
 p_direction(b_model)
 
 
-#Get desired OR to achieve a 1% ARD assuming a 4% risk
+#Get desired OR to achieve a 1% ARD assuming a 3.99% risk (TKI study)
 arr = 0.01
 baseline_risk = baseline_risk_tki = 0.0399
 desired_or <- ((baseline_risk - arr) / (1 - (baseline_risk - arr))) / (baseline_risk / (1 - baseline_risk))
 
-#Get p threshold
+#Get the probability of the treatment effect being equal to or greater than the desired OR
 sigp_tki <- p_significance(b_model, log(desired_or))
-sigp_tki
 
-#Do the same for Bevacizumab
+
+#Do the same thing but assuming a 1.3% risk (ICI study)
 baseline_risk = baseline_risk_ic = 0.013
 desired_or <- ((baseline_risk - arr) / (1 - (baseline_risk - arr))) / (baseline_risk / (1 - baseline_risk))
-
-#Get p threshold
 sigp_ic <- p_significance(b_model, log(desired_or))
-sigp_ic
 
 
-#Plot FP
-#First, sample the posterior distribution of study-levle estimates and the overall estimate
+
+
+#Sample the posterior distribution of study-level estimates and the overall estimate of treatment effect
 study_es <- b_model %>%
   spread_draws(r_study[study, ], b_ttt) %>%
-  mutate(b_ttt = r_study + b_ttt,
-         type = "Study-level estimate",
-         study = study %>% str_replace_all("\\.", " "))
+  mutate(b_ttt = r_study + b_ttt, #Create treatment effect estimates for each study
+         type = "Study-level estimate", #Clarify that this is the treatment effect for each study
+         study = study %>% str_replace_all("\\.", " ")) #Remove unnecessary dots added
 
 pooled_es <- spread_draws(b_model, b_ttt) %>% 
-  mutate(study = " Overall Effect Size",
-         type = "Pooled estimate")
+  mutate(study = " Overall Effect Size", #Clarify that this is the pooled/overall treatment effect
+         type = "Pooled estimate") #Same
 
-#Exponentiate
+#Exponentiate to get odds instead of log-odds ratio
 fp_data <- bind_rows(study_es, pooled_es) %>%
   mutate(b_ttt = b_ttt %>% exp)
 
 
 
-#Add title
+#Create title and subtitles for the plot
 main_title <- "Reconstructed forest plot for effect of anticoagulants on the risk of arterial thrombotic events."
 subtitle <- "We used a binomial-normal heirarchical model with the following priors: treatment effect (log odds ratio) ~ N(0, 1),\nbaseline risk (log odds) ~ N(0, 10), heterogeneity (\U03C4) ~ Half-Cauchy(0, 0.5)."
 
@@ -88,7 +101,7 @@ ggplot(data = fp_data[fp_data$study != "Pooled Effect Size", ],
        aes(y = study,
            x = b_ttt
 )) +
-  #Add Density plot
+  #Add Density plots
   geom_density_ridges(col = NA,
                       scale = 0.5,
                       alpha = 0.5,
@@ -107,9 +120,6 @@ ggplot(data = fp_data[fp_data$study != "Pooled Effect Size", ],
   #Create title
   ggtitle(main_title,
           subtitle = subtitle) +
-  # Add vertical lines for pooled effect and CI
-  # geom_vline(xintercept = fixef(b_model) %>% {.[nrow(.), 3:4]} %>% exp, 
-  #            color = "grey", linetype = 2, lwd = 1.25) +
   geom_vline(xintercept = 1, color = "black", 
              lwd = 1.25, linetype = 2) +
   #X and Y axes aesthetics
@@ -135,6 +145,7 @@ ggplot(data = fp_data[fp_data$study != "Pooled Effect Size", ],
         legend.text = element_text(size = 12, face = "bold"),
         legend.key.width = unit(1.5, "cm"),
         legend.key.height = unit(0.75, "cm"))
+#Save
 ggsave("C:/Ahmed's Stuff/ResearchStuff/Anticoags_ATEs_Cancer/Forest.png",
        dpi = 600,
        width = 16,
