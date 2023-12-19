@@ -1,4 +1,4 @@
-#Load necessary packages
+#Load necessary packages (please make sure to have these packages installed beforehand)
 library(dplyr)
 library(tidyr)
 library(readxl)
@@ -145,9 +145,4 @@ ggplot(data = fp_data[fp_data$study != "Pooled Effect Size", ],
         legend.text = element_text(size = 12, face = "bold"),
         legend.key.width = unit(1.5, "cm"),
         legend.key.height = unit(0.75, "cm"))
-#Save
-ggsave("C:/Ahmed's Stuff/ResearchStuff/Anticoags_ATEs_Cancer/Forest.png",
-       dpi = 600,
-       width = 16,
-       height = 9)
 
